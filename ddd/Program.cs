@@ -1,5 +1,4 @@
 ﻿using System;
-using ddd.Items.Interface;
 
 namespace ddd
 {
@@ -15,6 +14,11 @@ namespace ddd
 
     public interface IQuery<T, Res> : IQuery where T : IAggregate { }
 
+    public interface Id
+    {
+        string ToSystem();
+    }
+
     public interface IClient<T> where T : IAggregate
     {
         void Tell(ICommand<T> cmd);
@@ -24,11 +28,6 @@ namespace ddd
 
     public abstract class Aggregate<T> where T : IAggregate
     {
-        public Aggregate()
-        {
-            OnLoad();
-        }
-
         internal object Receive(object msg)
         {
             if (msg is IQuery qry)
@@ -59,6 +58,20 @@ namespace ddd
         }
     }
 
+    /// Merge with base class?
+    public abstract class Aggregate<T, TId>: Aggregate<T>
+        where T : IAggregate
+        where TId : Id
+    {
+        public TId Id { get; private set; }
+
+        internal void Init(TId id)
+        {
+            Id = id;
+            this.OnLoad();
+        }
+    }
+
     public class Client<T> : IClient<T> where T : IAggregate
     {
         private readonly Aggregate<T> aggregate;
@@ -78,6 +91,7 @@ namespace ddd
             aggregate.Dispatch(cmd);
         }
     }
+
     namespace Other
     {
         namespace Interface
@@ -90,6 +104,25 @@ namespace ddd
 
     namespace Items
     {
+        public class BaseAggregate<T, TId> : Aggregate<T, TId>
+            where T:IAggregate
+            where TId: Id
+        {
+            public override void OnLoad()
+            {
+                Console.WriteLine("BASE [{0}]: loaded\n",Id.ToSystem());
+            }
+
+            public override object Dispatch(object msg)
+            {
+                Console.WriteLine("BASE [{0}]: Pre dispatching: {1}", Id.ToSystem(), msg.GetType());
+                var res = base.Dispatch(msg);
+                Console.WriteLine("BASE [{0}]: Dispatched: {1} with result: {2}\n", Id.ToSystem(), msg.GetType(), res);
+
+                return res;
+            }
+        }
+
         namespace Interface
         {
             public interface IItem : IAggregate { }
@@ -99,30 +132,48 @@ namespace ddd
             public class Close : ICommand<IItem> { }
 
             public class IsClosed : IQuery<IItem, bool> { }
+
+            public class ItemId :  Id
+            {
+                public ItemId(string id)
+                {
+                    Id = id.ToUpperInvariant();
+                }
+
+                public string Id { get; }
+
+                public string ToSystem() => Id;
+            }
+
+            public interface IItemsRepository
+            {
+                int Load(ItemId id);
+                void Save(ItemId id);
+            }
+
         }
 
         namespace Aggregates
         {
-            public class Item : Aggregate<Interface.IItem>
+            using ddd.Items.Interface;
+
+            public class Item : BaseAggregate<Interface.IItem, ItemId>
             {
                 int state;
                 bool isClosed = false;
+                private readonly IItemsRepository repo;
+
+                public Item(IItemsRepository repo)
+                {
+                    this.repo = repo;
+                }
 
                 public override void OnLoad()
                 {
                     this.state = 42;
                     Console.WriteLine("Loaded");
+                    base.OnLoad();
                 }
-
-                public override object Dispatch(object msg)
-                {
-                    Console.WriteLine("On dispatch: {0}", msg.GetType());
-                    var res = base.Dispatch(msg);
-                    Console.WriteLine("Handled: {0}\n", msg.GetType());
-
-                    return res;
-                }
-
 
                 public void Handle(Open cmd)
                 {
@@ -140,36 +191,62 @@ namespace ddd
             }
         }
     }
-
-    public class Finance : IBoundedContext
+    namespace Implementations
     {
-        public static IClient<T> Get<T>(string id) where T:IAggregate
-        {
-            if (typeof(T)==typeof(IItem))
-            {
-                return (IClient<T>)
-                    new Client<Items.Interface.IItem>( new Items.Aggregates.Item() );
-            };
+        using ddd.Items.Interface;
 
-            throw new Exception("type is not registered");
+        public class ItemsRepository : IItemsRepository
+        {
+            public int Load(ItemId id)
+            {
+                return 42;
+            }
+
+            public void Save(ItemId id)
+            {
+                throw new NotImplementedException();
+            }
+        }
+
+        public class Finance : IBoundedContext
+        {
+            public static IClient<T> Get<T>(Id id) where T : IAggregate
+            {
+                //Hook with Autorfac
+                if (typeof(T) == typeof(IItem))
+                {
+                    var item = new Items.Aggregates.Item(
+                            new ItemsRepository()
+                        );
+                    item.Init((dynamic)id);
+                    return (IClient<T>)
+                        new Client<Items.Interface.IItem>(item);
+                };
+
+                throw new Exception("type is not registered");
+            }
         }
     }
+
 
     class Program
     {
         static void Main(string[] args)
         {
 
-            var item = Finance.Get<Items.Interface.IItem>("huy");
+            var item = Implementations.Finance.Get<Items.Interface.IItem>(
+                    new Items.Interface.ItemId("33dd1a")
+                );
 
-            Console.WriteLine("Item isClosed: {0}", item.Ask(new IsClosed()));
+            Console.WriteLine("Item isClosed: {0}", item.Ask(new Items.Interface.IsClosed()));
 
-            item.Tell(new Open());
-            item.Tell(new Close());
+            item.Tell(new Items.Interface.Open());
+            item.Tell(new Items.Interface.Close());
 
-            Console.WriteLine("Item isClosed: {0}", item.Ask(new IsClosed()));
+            Console.WriteLine("Item isClosed: {0}", item.Ask(new Items.Interface.IsClosed()));
 
             Console.WriteLine("Hello World!");
+            Console.ReadLine();
         }
     }
 }
