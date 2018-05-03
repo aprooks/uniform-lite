@@ -4,6 +4,7 @@ using ddd.Items.Interface;
 namespace ddd
 {
     public interface IBoundedContext{}
+
     public interface IAggregate { }
 
     public interface ICommand { }
